@@ -14,3 +14,5 @@
 - `q`/`Ctrl+c`: Quit
 
 > Note: For Elasticsearch 6.x clusters only
+
+![screenshot-es](/images/screenshot-es.png)

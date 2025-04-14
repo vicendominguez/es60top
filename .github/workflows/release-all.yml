@@ -1,0 +1,86 @@
+name: Build Binaries for Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build:
+    name: Build release binaries
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+        exclude:
+          - goarch: arm64 
+            goos: windows 
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Build Go binaries
+        id: buildgo
+        uses: wangyoucao577/go-release-action@v1
+        with:
+          pre_command: "export CGO_ENABLED=0"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          goos: ${{ matrix.goos }}
+          goarch: ${{ matrix.goarch }}
+          goversion: "1.24"
+          release_tag: ${{ github.event.release.tag_name }}
+          release_name: ${{ github.event.release.tag_name }}
+          ldflags: -s -X main.version=${{ github.event.release.tag_name }}
+          compress_assets: "OFF" 
+          upload: true 
+          overwrite: true
+      - name: Show release asset directory
+        run: ls -alR ${{ steps.buildgo.outputs.release_asset_dir }}
+      - name: 'Upload GitHub Artifact'
+        uses: actions/upload-artifact@v4
+        with:
+          name: es60top-${{ github.event.release.tag_name }}-linux-amd64
+          path: ${{ steps.buildgo.outputs.release_asset_dir }}/es60top-${{ github.event.release.tag_name }}-linux-amd64
+          overwrite: true
+  debian:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: es60top-${{ github.event.release.tag_name }}-linux-amd64 
+          path: dist/
+      - name: workdir
+        run:  pwd && ls -al dist/
+      - name: Install dpkg tools
+        run: sudo apt-get update && sudo apt-get install -y dpkg-dev
+      - name: Create Debian package
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          mkdir -p es60top_${VERSION}_amd64/usr/local/bin
+          cp dist/es60top-v${VERSION}-linux-amd64 es60top_${VERSION}_amd64/usr/local/bin/es60top
+          chmod 755 es60top_${VERSION}_amd64/usr/local/bin/es60top
+          mkdir -p es60top_${VERSION}_amd64/DEBIAN
+          cat <<EOF > es60top_${VERSION}_amd64/DEBIAN/control
+          Package: es60top
+          Version: ${VERSION}
+          Section: utils
+          Priority: optional
+          Architecture: amd64
+          Maintainer: Vicen Dominguez
+          Description: About es60top is an old ElasticSearch monitoring client like top for the deprecated 6.x versions
+          EOF
+          dpkg-deb --build es60top_${VERSION}_amd64
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: es60top_**.deb
