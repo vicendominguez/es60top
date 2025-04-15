@@ -19,4 +19,4 @@
 
 ## Install
 
-MacOS  (amd64/arm64): `brew tap vicendominguez/tap` and then `brew install <formula>`
+MacOS  (amd64/arm64): `brew tap vicendominguez/tap` and then `brew install es60top`
