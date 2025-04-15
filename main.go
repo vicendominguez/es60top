@@ -279,8 +279,6 @@ func (m model) connectAndFetchCmd() tea.Cmd {
 			}
 
 			// --- Use go-elasticsearch Ping ---
-
-			// --- Use go-elasticsearch Ping ---
 			// Create a context with a timeout for the ping request
 			pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer pingCancel() // Ensure the context cancel func is called
@@ -628,6 +626,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.showingShards {
 			switch msg.String() {
 			case "enter":
+				if m.esClient == nil {
+					m.shardErr = fmt.Errorf("cannot fetch shards: client not connected")
+					m.err = fmt.Errorf("cannot fetch shards: client not connected")
+					return m, nil // No hacer nada más si el cliente no está listo
+				}
 				selectedRow := m.indexTable.SelectedRow()
 				if selectedRow != nil && len(selectedRow) > 0 {
 					indexName := selectedRow[0]
@@ -643,6 +646,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.isLoading = true
 				m.err = nil
 				m.showingShards = false
+				// Reconnect/fetch main data
+				return m, tea.Batch(m.spinner.Tick, m.connectAndFetchCmd())
+			case "s":
+				m.isLoading = true
+				m.err = nil
+				m.showingShards = true
 				// Reconnect/fetch main data
 				return m, tea.Batch(m.spinner.Tick, m.connectAndFetchCmd())
 			}
@@ -672,35 +681,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(cmds...) // Ignore if showing shards
 		}
 		m.isLoading = false
-		m.err = msg.Err // Store general fetch error
-
 		// Update model state from message payload
 		// Note: Population logic depends on successful parsing within fetchEsData now
-		m.clusterInfo = msg.Cluster
-		m.nodeInfo = msg.Nodes
-		m.indexInfo = msg.Indices
-		m.latency = msg.Latency
-		m.lastUpdate = msg.Timestamp
+		if msg.Err == nil {
+			m.clusterInfo = msg.Cluster
+			m.nodeInfo = msg.Nodes
+			m.indexInfo = msg.Indices
+			m.latency = msg.Latency
+			m.lastUpdate = msg.Timestamp
 
-		// Update Node Table Rows (no change here)
-		nodeRows := make([]table.Row, len(m.nodeInfo))
-		for i, node := range m.nodeInfo {
-			uptimeStr := "-"
-			if node.UptimeMillis > 0 {
-				uptimeStr = formatDuration(time.Duration(node.UptimeMillis) * time.Millisecond)
+			// Update Node Table Rows (no change here)
+			nodeRows := make([]table.Row, len(m.nodeInfo))
+			for i, node := range m.nodeInfo {
+				uptimeStr := "-"
+				if node.UptimeMillis > 0 {
+					uptimeStr = formatDuration(time.Duration(node.UptimeMillis) * time.Millisecond)
+				}
+				diskStr := fmt.Sprintf("%d%% (%s free)", node.DiskPercent, humanize.Bytes(node.DiskFree))
+				nodeRows[i] = table.Row{node.Name, node.IP, node.Roles, formatPercent(node.CPUPercent), formatPercent(node.RAMPercent), formatPercent(node.HeapPercent), diskStr, uptimeStr}
 			}
-			diskStr := fmt.Sprintf("%d%% (%s free)", node.DiskPercent, humanize.Bytes(node.DiskFree))
-			nodeRows[i] = table.Row{node.Name, node.IP, node.Roles, formatPercent(node.CPUPercent), formatPercent(node.RAMPercent), formatPercent(node.HeapPercent), diskStr, uptimeStr}
-		}
-		m.nodeTable.SetRows(nodeRows)
+			m.nodeTable.SetRows(nodeRows)
 
-		// Update Index Table Rows (no change here)
-		indexRows := make([]table.Row, len(m.indexInfo))
-		for i, index := range m.indexInfo {
-			indexRows[i] = table.Row{index.Name, renderHealth(index.Health, m.styleClusterStatus), index.Status, index.DocsCount, index.StorageSize, index.Primary, index.Replicas}
+			// Update Index Table Rows (no change here)
+			indexRows := make([]table.Row, len(m.indexInfo))
+			for i, index := range m.indexInfo {
+				indexRows[i] = table.Row{index.Name, renderHealth(index.Health, m.styleClusterStatus), index.Status, index.DocsCount, index.StorageSize, index.Primary, index.Replicas}
+			}
+			m.indexTable.SetRows(indexRows)
+		} else {
+			m.err = msg.Err
 		}
-		m.indexTable.SetRows(indexRows)
-
 	case shardDataMsg: // Received shard data (parsed in fetchShardData)
 		m.isLoading = false
 		m.shardErr = msg.Err // Store shard fetch error
@@ -787,15 +797,15 @@ func (m model) View() string {
 		statusLine := " "
 		if m.isLoading {
 			statusLine += m.spinner.View() + " Refreshing..."
+		} else if m.err != nil { // Show general fetch error if present
+			errorStr := fmt.Sprintf(" | Error: %s", m.err.Error())
+			if len(errorStr) > 60 {
+				errorStr = errorStr[:57] + "..."
+			}
+			statusLine += lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render(fmt.Sprintf("Last Update: %s %s", m.lastUpdate.Format("15:04:05"), errorStr))
 		} else {
 			statusLine += fmt.Sprintf("Last Update: %s | API Latency: %s", m.lastUpdate.Format("15:04:05"), m.latency.Truncate(time.Millisecond))
-			if m.err != nil { // Show general fetch error if present
-				errorStr := fmt.Sprintf(" | Error: %s", m.err.Error())
-				if len(errorStr) > 60 {
-					errorStr = errorStr[:57] + "..."
-				}
-				statusLine += lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render(errorStr)
-			}
+
 		}
 		helpLine := m.styleHelp.Render("Scroll ↑/↓ PgUp/PgDn | Enter for shards | 'r' refresh | 'q' quit")
 		footer := lipgloss.JoinHorizontal(lipgloss.Bottom,
@@ -888,7 +898,7 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Println("es-tui version", VERSION)
+		fmt.Println("es60top version", VERSION)
 		os.Exit(0)
 	}
 
