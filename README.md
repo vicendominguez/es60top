@@ -20,3 +20,8 @@
 ## Install
 
 MacOS  (amd64/arm64): `brew tap vicendominguez/tap` and then `brew install es60top`
+
+## Trichs
+
+1. **Automatic Reconnection:**: The system will automatically reconnect if a disconnection occurs.
+2. **Disconnection Indicator**: The last updated timestamp before disconnection will remain visible on the screen (to help identify when the issue occurred).
