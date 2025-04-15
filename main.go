@@ -18,6 +18,8 @@ import (
 	"github.com/olivere/elastic/v6"
 )
 
+const VERSION = "0.0.1"
+
 type ClusterInfo struct {
 	Name                string
 	Status              string // green, yellow, red
@@ -602,7 +604,13 @@ func renderHealth(health string, styles map[string]lipgloss.Style) string {
 func main() {
 	esURL := flag.String("url", "http://localhost:9200", "Elasticsearch cluster URL")
 	refreshIntervalStr := flag.String("interval", "5s", "Refresh interval (e.g., 4s, 1m)")
+	version := flag.Bool("version", false, "display version")
 	flag.Parse()
+
+	if *version {
+		fmt.Println("Version ", VERSION)
+		return
+	}
 
 	refreshInterval, err := time.ParseDuration(*refreshIntervalStr)
 	if err != nil {

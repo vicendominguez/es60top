@@ -16,3 +16,7 @@
 > Note: For Elasticsearch 6.x clusters only
 
 ![screenshot-es](/images/screenshot-es.png)
+
+## Install
+
+MacOS  (amd64/arm64): `brew tap vicendominguez/tap` and then `brew install <formula>`
