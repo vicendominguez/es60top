@@ -145,6 +145,10 @@ type model struct {
 	lastUpdate  time.Time
 	err         error // Last general fetch or connection error
 
+	// Delta tracking
+	previousDocCounts map[string]int64 // index name -> previous doc count
+	indexDeltas       map[string]int64 // index name -> delta since last refresh
+
 	// UI State
 	spinner   spinner.Model
 	isLoading bool
@@ -201,7 +205,7 @@ func initialModel(esURL string, interval time.Duration) model {
 		table.WithFocused(false), table.WithHeight(7),
 		table.WithStyles(table.Styles{Header: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("241")), Cell: lipgloss.NewStyle().Foreground(lipgloss.Color("251"))}))
 	indexTbl := table.New(
-		table.WithColumns([]table.Column{{Title: "Index", Width: 35}, {Title: "Health", Width: 14}, {Title: "Status", Width: 8}, {Title: "Docs", Width: 12}, {Title: "Size", Width: 10}, {Title: "P", Width: 3}, {Title: "R", Width: 3}}),
+		table.WithColumns([]table.Column{{Title: "Index", Width: 30}, {Title: "Health", Width: 14}, {Title: "Status", Width: 8}, {Title: "Docs", Width: 12}, {Title: "Delta", Width: 10}, {Title: "Size", Width: 10}, {Title: "P", Width: 3}, {Title: "R", Width: 3}}),
 		table.WithFocused(true), table.WithHeight(22),
 		table.WithStyles(table.Styles{Header: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("241")), Cell: lipgloss.NewStyle().Foreground(lipgloss.Color("251")), Selected: lipgloss.NewStyle().Bold(true).Background(lipgloss.Color("236")).Foreground(lipgloss.Color("254"))}))
 	shardTbl := table.New(

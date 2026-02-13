@@ -1,0 +1,206 @@
+[tools]
+go = "1.23"
+
+[env]
+ES_TEST_URL = "http://localhost:9201"
+
+[tasks.test]
+description = "Run Go tests"
+run = "go test -v ./..."
+
+[tasks."test:helpers"]
+description = "Run helper function tests"
+run = "go test -v -run 'TestParseDocCount|TestFormatDelta'"
+
+[tasks."es:start"]
+description = "Start Elasticsearch 6.8.23 Docker container for testing"
+run = '''
+#!/usr/bin/env bash
+set -e
+
+# Check if container already exists
+if docker ps -a --format '{{.Names}}' | grep -q "^es6-test$"; then
+  echo "Container es6-test already exists. Use 'mise run es:restart' or 'mise run es:stop' first."
+  exit 1
+fi
+
+docker run -d \
+  --name es6-test \
+  -p 9201:9200 \
+  -p 9301:9300 \
+  -e "discovery.type=single-node" \
+  -e "xpack.security.enabled=false" \
+  docker.elastic.co/elasticsearch/elasticsearch:6.8.23
+
+echo "Waiting 30 seconds for ES to start..."
+sleep 30
+
+if curl -s http://localhost:9201 | grep -q "6.8.23"; then
+  echo "✓ Elasticsearch 6.8.23 started successfully on port 9201"
+else
+  echo "✗ Failed to start Elasticsearch"
+  exit 1
+fi
+'''
+
+[tasks."es:stop"]
+description = "Stop and remove Elasticsearch test container"
+run = "docker stop es6-test && docker rm es6-test"
+
+[tasks."es:restart"]
+description = "Restart Elasticsearch test container"
+run = "docker restart es6-test && sleep 30"
+
+[tasks."es:health"]
+description = "Check Elasticsearch cluster health"
+run = "curl -s 'http://localhost:9201/_cluster/health?pretty'"
+
+[tasks."test:delta"]
+description = "Run comprehensive delta tracking tests"
+run = '''
+#!/usr/bin/env bash
+set -e
+
+echo "Starting delta tracking test..."
+echo "Make sure es60top is running with: ./es60top --url $ES_TEST_URL --interval 5s"
+echo ""
+
+# Create initial test index if it doesn't exist
+echo "Creating test index with 50 documents..."
+curl -s -X PUT "$ES_TEST_URL/test" -H 'Content-Type: application/json' -d'{
+  "settings": {"number_of_shards": 1, "number_of_replicas": 0}
+}' 2>/dev/null || true
+
+for i in {1..50}; do
+  curl -s -X POST "$ES_TEST_URL/test/_doc" \
+    -H 'Content-Type: application/json' \
+    -d "{\"field\":\"value$i\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > /dev/null
+done
+curl -s -X POST "$ES_TEST_URL/test/_refresh" > /dev/null
+echo "Initial index created with 50 documents."
+echo ""
+
+# Wait 10 seconds for initial state
+echo "Waiting 10 seconds for initial refresh..."
+sleep 10
+
+# Add 100 more documents
+echo "Adding 100 documents to 'test' index..."
+for i in {51..150}; do
+  curl -s -X POST "$ES_TEST_URL/test/_doc" \
+    -H 'Content-Type: application/json' \
+    -d "{\"field\":\"value$i\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > /dev/null
+done
+curl -s -X POST "$ES_TEST_URL/test/_refresh" > /dev/null
+echo "Done. You should see +100 delta in green after next refresh."
+echo ""
+
+# Wait for next refresh cycle
+sleep 7
+
+# Delete some documents
+echo "Deleting documents with field >= value100..."
+curl -s -X POST "$ES_TEST_URL/test/_delete_by_query?refresh=true" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "query": {
+      "range": {
+        "field": {
+          "gte": "value100"
+        }
+      }
+    }
+  }' > /dev/null
+echo "Done. You should see negative delta in red after next refresh."
+echo ""
+
+# Wait for next refresh
+sleep 7
+
+# Create a new index
+echo "Creating new index 'testindex2' with 25 documents..."
+curl -s -X PUT "$ES_TEST_URL/testindex2" -H 'Content-Type: application/json' -d'{
+  "settings": {"number_of_shards": 1, "number_of_replicas": 0}
+}' > /dev/null
+
+for i in {1..25}; do
+  curl -s -X POST "$ES_TEST_URL/testindex2/_doc?refresh=true" \
+    -H 'Content-Type: application/json' \
+    -d "{\"field\":\"value$i\"}" > /dev/null
+done
+echo "Done. You should see new index appear with '—' delta after next refresh."
+echo ""
+
+echo "Test complete! Observe the delta column in es60top."
+'''
+
+[tasks."test:stress"]
+description = "Stress test with multiple indices"
+run = '''
+#!/usr/bin/env bash
+set -e
+
+echo "Creating 20 test indices with varying doc counts..."
+for idx in {1..20}; do
+  curl -s -X PUT "$ES_TEST_URL/stresstest_$idx" -H 'Content-Type: application/json' -d'{
+    "settings": {"number_of_shards": 1, "number_of_replicas": 0}
+  }' > /dev/null
+
+  # Index random number of documents (1-50)
+  docs=$((RANDOM % 50 + 1))
+  echo "Creating stresstest_$idx with $docs documents..."
+  for doc in $(seq 1 $docs); do
+    curl -s -X POST "$ES_TEST_URL/stresstest_$idx/_doc?refresh=true" \
+      -H 'Content-Type: application/json' \
+      -d "{\"field\":\"value$doc\"}" > /dev/null
+  done
+done
+
+echo ""
+echo "Stress test complete! Check es60top for 20+ indices with deltas."
+'''
+
+[tasks."test:cleanup"]
+description = "Clean up all test indices"
+run = '''
+#!/usr/bin/env bash
+set +e  # Allow failures since indices may not exist
+
+echo "Deleting test indices..."
+curl -s -X DELETE "$ES_TEST_URL/test" 2>/dev/null
+curl -s -X DELETE "$ES_TEST_URL/testindex2" 2>/dev/null
+curl -s -X DELETE "$ES_TEST_URL/stresstest_*" 2>/dev/null
+
+echo "Cleanup complete!"
+'''
+
+[tasks.build]
+description = "Build es60top binary"
+run = "go build -o es60top ."
+
+[tasks.run]
+description = "Run es60top against test ES cluster"
+run = "./es60top --url $ES_TEST_URL --interval 5s"
+
+[tasks."dev:setup"]
+description = "Setup complete development environment"
+depends = ["es:start", "build"]
+run = '''
+#!/usr/bin/env bash
+set -e
+
+# Wait for ES to be fully ready
+sleep 5
+
+# Clean up any existing test data
+echo "Cleaning up test indices..."
+curl -s -X DELETE "$ES_TEST_URL/test" 2>/dev/null || true
+curl -s -X DELETE "$ES_TEST_URL/testindex2" 2>/dev/null || true
+curl -s -X DELETE "$ES_TEST_URL/stresstest_*" 2>/dev/null || true
+
+echo ""
+echo "✓ Development environment ready!"
+echo ""
+echo "Run es60top with: mise run"
+echo "Run delta tests with: mise run test:delta"
+'''

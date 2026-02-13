@@ -2,10 +2,12 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/dustin/go-humanize"
 )
 
 func formatDuration(d time.Duration) string {
@@ -75,4 +77,45 @@ func clamp(val, min, max int) int {
 		return max
 	}
 	return val
+}
+
+// parseDocCount converts ES CAT API doc count string to int64
+// Handles formats: "1234", "1,234", "", "null"
+func parseDocCount(docCountStr string) int64 {
+	// Remove commas and whitespace
+	cleaned := strings.ReplaceAll(strings.TrimSpace(docCountStr), ",", "")
+	if cleaned == "" || cleaned == "null" {
+		return 0
+	}
+
+	count, err := strconv.ParseInt(cleaned, 10, 64)
+	if err != nil {
+		return 0 // Graceful fallback
+	}
+	return count
+}
+
+// formatDelta formats document count delta with sign and thousands separator
+// Returns styled string for display
+func formatDelta(delta int64, styles map[string]lipgloss.Style) string {
+	if delta == 0 {
+		// No change or first appearance
+		style := lipgloss.NewStyle().Foreground(lipgloss.Color("241")) // gray
+		return style.Render("—")
+	}
+
+	var sign string
+	var style lipgloss.Style
+
+	if delta > 0 {
+		sign = "+"
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("10")) // green
+	} else {
+		sign = "" // Negative sign already present
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("9")) // red
+	}
+
+	// Format with thousands separator
+	deltaStr := humanize.Comma(delta) // e.g., "1,234" or "-1,234"
+	return style.Render(sign + deltaStr)
 }

@@ -116,6 +116,39 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.indexInfo = msg.Indices
 			m.latency = msg.Latency
 			m.lastUpdate = msg.Timestamp
+
+			// Initialize delta maps if nil
+			if m.previousDocCounts == nil {
+				m.previousDocCounts = make(map[string]int64)
+				m.indexDeltas = make(map[string]int64)
+			}
+
+			// Calculate deltas for current indices
+			currentDocCounts := make(map[string]int64)
+			for _, index := range msg.Indices {
+				// Parse doc count from string (e.g., "1,234" -> 1234)
+				currentCount := parseDocCount(index.DocsCount)
+				currentDocCounts[index.Name] = currentCount
+
+				// Calculate delta
+				if prevCount, exists := m.previousDocCounts[index.Name]; exists {
+					m.indexDeltas[index.Name] = currentCount - prevCount
+				} else {
+					m.indexDeltas[index.Name] = 0 // First appearance, no delta
+				}
+			}
+
+			// Clean up deltas for disappeared indices
+			for indexName := range m.previousDocCounts {
+				if _, stillExists := currentDocCounts[indexName]; !stillExists {
+					delete(m.previousDocCounts, indexName)
+					delete(m.indexDeltas, indexName)
+				}
+			}
+
+			// Store current counts as previous for next refresh
+			m.previousDocCounts = currentDocCounts
+
 			// Update tables
 			nodeRows := make([]table.Row, len(m.nodeInfo))
 			for i, node := range m.nodeInfo {
@@ -129,7 +162,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.nodeTable.SetRows(nodeRows)
 			indexRows := make([]table.Row, len(m.indexInfo))
 			for i, index := range m.indexInfo {
-				indexRows[i] = table.Row{index.Name, renderHealth(index.Health, m.styleClusterStatus), index.Status, index.DocsCount, index.StorageSize, index.Primary, index.Replicas}
+				indexRows[i] = table.Row{index.Name, renderHealth(index.Health, m.styleClusterStatus), index.Status, index.DocsCount, formatDelta(m.indexDeltas[index.Name], m.styleClusterStatus), index.StorageSize, index.Primary, index.Replicas}
 			}
 			m.indexTable.SetRows(indexRows)
 		} else { // Fetch failed
